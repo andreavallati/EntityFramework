@@ -1,4 +1,4 @@
-# EntityFramework E-Commerce Sample
+# Entity Framework
 
 ## Overview
 This project is an Entity Framework Core sample implementation of an e-commerce system. It demonstrates key EF Core features, such as:
