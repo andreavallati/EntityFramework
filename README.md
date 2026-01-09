@@ -96,33 +96,6 @@ A comprehensive demonstration of **Entity Framework Core 9.0** features using a 
 
 ---
 
-## Project Structure
-```
-EntityFramework/
-│── Context/
-│   ├── ECommerceContext.cs                # Database context configuration
-│
-│── Entities/
-│   ├── Address.cs                         # JSON Column Example: Embedded Address
-│   ├── Category.cs                        # Product and Category (One-to-Many)
-│   ├── CreditCardPayment.cs               # CreditCard payment type
-│   ├── Customer.cs                        # Customer and Orders (One-to-Many)
-│   ├── Order.cs                           # Many-to-Many relationship with Products
-│   ├── OrderItem.cs                       # Many-to-Many (Order and Products via OrderItem)
-│   ├── Payment.cs                         # Base class for Payment (TPH)
-│   ├── PayPalPayment.cs                   # PayPal payment type
-│   ├── Product.cs                         # Many-to-Many relationship with Order
-│   ├── TopCustomer.cs                     # View Example: Top Customers by Spending
-│
-│── Helpers/
-│   ├── CompiledQueries.cs                 # Performance-optimized queries
-│
-│── Program.cs                             # Entry point and demo usage
-│── EntityFramework.csproj                 # Project file
-```
-
----
-
 ## Installation
 ### Prerequisites
 - .NET 8 SDK
