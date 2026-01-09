@@ -1,5 +1,6 @@
 ﻿using EntityFramework.Context;
 using EntityFramework.Entities;
+using EntityFramework.Enums;
 using EntityFramework.Helpers;
 using Microsoft.EntityFrameworkCore;
 
@@ -9,12 +10,16 @@ namespace EntityFramework
     {
         public static async Task Main(string[] args)
         {
+            Console.WriteLine("=== Entity Framework Core - E-Commerce Sample ===\n");
+
             using var context = new ECommerceContext();
 
             // Ensure database is created and seed data is added
             await context.Database.EnsureCreatedAsync();
+            Console.WriteLine("✓ Database initialized\n");
 
-            // Query using Compiled Query (Async)
+            // ========== 1. COMPILED QUERIES ==========
+            Console.WriteLine("--- 1. Compiled Queries ---");
             var electronicsCategory = await CompiledQueries.GetCategoryWithProductsAsync(context, 1);
             if (electronicsCategory != null)
             {
@@ -25,7 +30,6 @@ namespace EntityFramework
                 }
             }
 
-            // Query using Compiled Query (Sync)
             var customer = CompiledQueries.GetCustomerWithOrdersSync(context, 1);
             if (customer != null)
             {
@@ -35,8 +39,40 @@ namespace EntityFramework
                     Console.WriteLine($"  Order #{order.OrderId} placed on {order.OrderDate}");
                 }
             }
+            Console.WriteLine();
 
-            // Transaction Example
+            // ========== 2. CHANGE TRACKING DEMONSTRATION ==========
+            Console.WriteLine("--- 2. Change Tracking ---");
+            var trackedProduct = await context.Products.FirstAsync(p => p.ProductId == 1);
+            var originalPrice = trackedProduct.Price;
+            trackedProduct.Price = 899.99m;
+
+            var entries = context.ChangeTracker.Entries()
+                .Where(e => e.State == EntityState.Modified)
+                .ToList();
+
+            foreach (var entry in entries)
+            {
+                Console.WriteLine($"Modified Entity: {entry.Entity.GetType().Name}");
+                foreach (var prop in entry.Properties.Where(p => p.IsModified))
+                {
+                    Console.WriteLine($"  {prop.Metadata.Name}: {prop.OriginalValue} → {prop.CurrentValue}");
+                }
+            }
+            await context.SaveChangesAsync();
+            Console.WriteLine("✓ Changes saved\n");
+
+            // ========== 3. NO TRACKING QUERIES (Read-Only) ==========
+            Console.WriteLine("--- 3. AsNoTracking (Read-Only Queries) ---");
+            var untrackedProducts = await context.Products
+                .AsNoTracking()
+                .Where(p => p.CategoryId == 1)
+                .ToListAsync();
+            Console.WriteLine($"Retrieved {untrackedProducts.Count} products (not tracked)");
+            Console.WriteLine();
+
+            // ========== 4. TRANSACTIONS ==========
+            Console.WriteLine("--- 4. Transactions ---");
             using var transaction = await context.Database.BeginTransactionAsync();
             try
             {
@@ -48,16 +84,27 @@ namespace EntityFramework
                 context.Customers.Add(newCustomer);
                 await context.SaveChangesAsync();
 
+                var newOrder = new Order
+                {
+                    CustomerId = newCustomer.CustomerId,
+                    OrderDate = DateTime.UtcNow,
+                    TotalAmount = 199.99m,
+                    Status = OrderStatus.Pending
+                };
+                context.Orders.Add(newOrder);
+                await context.SaveChangesAsync();
+
                 await transaction.CommitAsync();
-                Console.WriteLine("Transaction committed.");
+                Console.WriteLine("✓ Transaction committed successfully\n");
             }
-            catch
+            catch (Exception ex)
             {
                 await transaction.RollbackAsync();
-                Console.WriteLine("Transaction rolled back.");
+                Console.WriteLine($"✗ Transaction rolled back: {ex.Message}\n");
             }
 
-            // 1. **Complex Query**: Group Products by Category and compute stats
+            // ========== 5. COMPLEX QUERIES & PROJECTIONS ==========
+            Console.WriteLine("--- 5. Complex Queries & Projections ---");
             var productStats = await context.Categories
                 .Select(category => new
                 {
@@ -67,74 +114,123 @@ namespace EntityFramework
                 })
                 .ToListAsync();
 
-            Console.WriteLine("\nProduct Stats:");
             foreach (var stat in productStats)
             {
-                Console.WriteLine($"Category: {stat.CategoryName}, Products: {stat.ProductCount}, Avg Price: {stat.AveragePrice:C}");
+                Console.WriteLine($"{stat.CategoryName}: {stat.ProductCount} products, Avg ${stat.AveragePrice:F2}");
             }
+            Console.WriteLine();
 
-            // 2. **Raw SQL Query**: Fetch Top Customers by Total Spending (Using View)
-            var topCustomers = await context.TopCustomers
-                .FromSqlInterpolated($"SELECT * FROM View_TopCustomersBySpending")
-                .ToListAsync();
-
-            Console.WriteLine("\nTop Customers by Spending:");
-            foreach (var topCustomer in topCustomers)
-            {
-                Console.WriteLine($"Customer: {topCustomer.CustomerName}, Total Spent: {topCustomer.TotalSpent:C}");
-            }
-
-            // 3. **Raw SQL Insert/Update**: Add a new product to the database
-            var rowsAffected = await context.Database.ExecuteSqlInterpolatedAsync(
-                $"INSERT INTO Products (Name, Price, CategoryId) VALUES ('New Product', 99.99, 1)");
-            Console.WriteLine($"\nRows affected by INSERT: {rowsAffected}");
-
-            // 4. **Advanced Query**: Fetch Orders with Nested Data
+            // ========== 6. INCLUDE & ThenInclude (Eager Loading) ==========
+            Console.WriteLine("--- 6. Eager Loading (Include/ThenInclude) ---");
             var ordersWithDetails = await context.Orders
                 .Include(o => o.Customer)
                 .Include(o => o.OrderItems)
-                .ThenInclude(oi => oi.Product)
+                    .ThenInclude(oi => oi.Product)
                 .Where(o => o.OrderDate >= DateTime.UtcNow.AddMonths(-1))
-                .Select(order => new
+                .ToListAsync();
+
+            foreach (var order in ordersWithDetails)
+            {
+                var total = order.OrderItems.Sum(oi => oi.Product.Price * oi.Quantity);
+                Console.WriteLine($"Order #{order.OrderId} by {order.Customer.FullName} - Status: {order.Status}");
+                Console.WriteLine($"  Items: {order.OrderItems.Count}, Total: ${total:F2}");
+            }
+            Console.WriteLine();
+
+            // ========== 7. QUERY FILTERS (Soft Delete) ==========
+            Console.WriteLine("--- 7. Query Filters (Soft Delete Pattern) ---");
+            var activeProducts = await context.Products.CountAsync();
+            Console.WriteLine($"Active products: {activeProducts}");
+
+            // Soft delete a product
+            var productToDelete = await context.Products.FirstAsync(p => p.ProductId == 4);
+            productToDelete.IsDeleted = true;
+            await context.SaveChangesAsync();
+
+            var activeProductsAfterDelete = await context.Products.CountAsync();
+            Console.WriteLine($"Active products after soft delete: {activeProductsAfterDelete}");
+
+            // Query including soft-deleted items
+            var allProducts = await context.Products.IgnoreQueryFilters().CountAsync();
+            Console.WriteLine($"All products (including soft-deleted): {allProducts}\n");
+
+            // ========== 8. CONCURRENCY HANDLING ==========
+            Console.WriteLine("--- 8. Optimistic Concurrency ---");
+            try
+            {
+                using var context1 = new ECommerceContext();
+                using var context2 = new ECommerceContext();
+
+                var product1 = await context1.Products.FirstAsync(p => p.ProductId == 1);
+                var product2 = await context2.Products.FirstAsync(p => p.ProductId == 1);
+
+                product1.Price = 999.99m;
+                await context1.SaveChangesAsync();
+                Console.WriteLine("✓ Context 1 saved successfully");
+
+                product2.Price = 1099.99m;
+                await context2.SaveChangesAsync();
+                Console.WriteLine("✓ Context 2 saved successfully");
+            }
+            catch (DbUpdateConcurrencyException ex)
+            {
+                Console.WriteLine($"✗ Concurrency conflict detected: {ex.Message}");
+                var entry = ex.Entries.Single();
+                var databaseValues = await entry.GetDatabaseValuesAsync();
+                Console.WriteLine("  Conflict resolution required!\n");
+            }
+
+            // ========== 9. RAW SQL QUERIES ==========
+            Console.WriteLine("--- 9. Raw SQL Queries ---");
+            var categoryId = 1;
+            var productsFromSql = await context.Products
+                .FromSqlInterpolated($"SELECT * FROM Products WHERE CategoryId = {categoryId} AND IsDeleted = 0")
+                .ToListAsync();
+            Console.WriteLine($"Products from raw SQL: {productsFromSql.Count}");
+            Console.WriteLine();
+
+            // ========== 10. SPLIT QUERIES ==========
+            Console.WriteLine("--- 10. Split Queries (AsSplitQuery) ---");
+            var categoriesWithProducts = await context.Categories
+                .Include(c => c.Products)
+                .AsSplitQuery()
+                .ToListAsync();
+            Console.WriteLine($"Loaded {categoriesWithProducts.Count} categories with split queries\n");
+
+            // ========== 11. GROUPING & AGGREGATIONS ==========
+            Console.WriteLine("--- 11. Grouping & Aggregations ---");
+            var ordersByStatus = await context.Orders
+                .GroupBy(o => o.Status)
+                .Select(g => new
                 {
-                    order.OrderId,
-                    CustomerName = order.Customer.FullName,
-                    TotalAmount = order.OrderItems.Sum(oi => oi.Product.Price * oi.Quantity),
-                    Products = order.OrderItems.Select(oi => oi.Product.Name).ToList()
+                    Status = g.Key,
+                    Count = g.Count(),
+                    TotalAmount = g.Sum(o => o.TotalAmount)
                 })
                 .ToListAsync();
 
-            Console.WriteLine("\nOrders with Details:");
-            foreach (var order in ordersWithDetails)
+            foreach (var group in ordersByStatus)
             {
-                Console.WriteLine($"Order #{order.OrderId} by {order.CustomerName}, Total: {order.TotalAmount:C}");
-                Console.WriteLine("Products: " + string.Join(", ", order.Products));
+                Console.WriteLine($"{group.Status}: {group.Count} orders, Total: ${group.TotalAmount:F2}");
             }
+            Console.WriteLine();
 
-            // 5. **Transaction with Raw SQL**: Update Product Prices within a Transaction
-            using var rawTransaction = await context.Database.BeginTransactionAsync();
-            try
+            // ========== 12. TABLE-PER-HIERARCHY (TPH) Inheritance ==========
+            Console.WriteLine("--- 12. TPH Inheritance (Payments) ---");
+            var allPayments = await context.Payments.ToListAsync();
+            foreach (var payment in allPayments)
             {
-                // Raw SQL Update
-                rowsAffected = await context.Database.ExecuteSqlInterpolatedAsync(
-                    $"UPDATE Products SET Price = Price * 1.10 WHERE CategoryId = 1");
-                Console.WriteLine($"\nRows affected by Price Update: {rowsAffected}");
-
-                // Simulate another operation in the transaction
-                var newCategory = new Category { Name = "New Category" };
-                context.Categories.Add(newCategory);
-                await context.SaveChangesAsync();
-
-                // Commit transaction
-                await transaction.CommitAsync();
-                Console.WriteLine("Transaction committed successfully.");
+                var paymentType = payment switch
+                {
+                    CreditCardPayment cc => $"Credit Card ending in {cc.CardNumber.Substring(Math.Max(0, cc.CardNumber.Length - 4))}",
+                    PayPalPayment pp => $"PayPal ({pp.PayPalEmail})",
+                    _ => "Unknown"
+                };
+                Console.WriteLine($"Payment #{payment.PaymentId}: {paymentType} - ${payment.Amount:F2}");
             }
-            catch
-            {
-                // Rollback transaction
-                await transaction.RollbackAsync();
-                Console.WriteLine("Transaction rolled back due to an error.");
-            }
+            Console.WriteLine();
+
+            Console.WriteLine("=== Demo Complete ===");
         }
     }
 }
